@@ -2,43 +2,23 @@ import configparser
 import email.generator
 import email.parser
 import email.policy
+import http
 import io
-import itertools
 import logging
 import os
-from pyclbr import Function
 import re
-from difflib import unified_diff
-from email.message import EmailMessage
+import socket
 import types
+from email.message import EmailMessage
 from typing import List, cast
 from urllib.parse import unquote, urlparse
 
-import clamd  # type: ignore
 import lxml.etree as ET
 import requests
 import urllib3
 from flask import Flask, Response, abort, request, stream_with_context
-from email.parser import BytesParser
 
 __version__ = "1.5"
-
-ALL_METHODS = [
-    "GET",
-    "HEAD",
-    "POST",
-    "PUT",
-    "DELETE",
-    "CONNECT",
-    "OPTIONS",
-    "TRACE",
-    "PATCH",
-]
-
-reg_retrieve_document = re.compile(":RetrieveDocumentSetRequest</Action>")
-
-# Service Path for PHRService will be set from response to connector.sds
-phr_service_path = "unknown"
 
 # to prevent flooding log
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -55,10 +35,6 @@ logging.basicConfig(
 logging.info(f"av_gate {__version__}")
 logging.info(f"set loglevel to {loglevel}")
 logging.debug(list(config["config"].items()))
-
-clamav: clamd.ClamdUnixSocket = clamd.ClamdUnixSocket(
-    path=config["config"]["clamd_socket"]
-)
 
 CONTENT_MAX = config["config"].getint("content_max", 800)
 REMOVE_MALICIOUS = config["config"].getboolean("remove_malicious", False)
@@ -90,15 +66,13 @@ def connector_sds():
             e.attrib[
                 "Location"
             ] = f"{previous_url.scheme}://{request.host}{previous_url.path}"
-            global phr_service_path
-            phr_service_path = previous_url.path
         else:
             KeyError("connector.sds does not contain PHRService location.")
 
         return create_response(ET.tostring(xml), upstream)
 
 
-@app.route("/<path:path>", methods=ALL_METHODS)
+@app.route("/<path:path>", methods=list(http.HTTPMethod))
 def switch(path):
     """Entrypoint with filter for PHRService"""
     if "PHRService" in path:
@@ -345,7 +319,7 @@ def handle_attachment(
 def get_malicious_content_ids(msg):
     """Extracting content_ids of malicious attachments"""
     for att in msg.iter_attachments():
-        scan_res = clamav.instream(io.BytesIO(att.get_content()))["stream"]
+        scan_res = scan_file(att.get_content())
         content_id = extract_id(att["Content-ID"])
 
         test_malicous = False
@@ -482,6 +456,78 @@ def get_replacement(mimetype):
 
 def dump(dict):
     return "\n".join([f"{k}: {v}" for (k, v) in dict.items()])
+
+# File Scanning
+
+def get_file_scanner():
+    clamd_path = config["config"].get("clamd_socket")
+    global icap_host
+    icap_host = config["config"].get("icap_host")
+
+    if not clamd_path and not icap_host:
+        raise AttributeError("Neither clamd nor icap is configured")
+    if clamd_path and icap_host:
+        raise AttributeError("Both, clamd and icap is configured")
+    
+    if clamd_path:
+        import clamd  # type: ignore
+        global clamav_sock
+        clamav_sock = clamd.ClamdUnixSocket(
+            path=config["config"]["clamd_socket"])
+        return scan_file_clamav
+    else:
+        # ICAP
+        global icap_port
+        icap_port = config["config"].get("icap_port", 1344)
+        global icap_service
+        icap_service = config["config"]["icap_service"]
+        return scan_file_icap
+
+def scan_file_clamav(content):
+    "return scan result, do use clamav socket"
+    scan_res = clamav_sock.instream(io.BytesIO(content))["stream"]
+    return scan_res
+    
+def scan_file_icap(content):
+    "return scan result, do use icap"                
+    req = f"RESPMOD {icap_service} ICAP/1.0\r\n"
+    req += f"Host: {icap_host}\r\n"
+    req += f"Encapsulated: res-body=0\r\n\r\n"
+    req += f"{len(content):x}\r\n"
+
+    footer = "\r\n0\r\n\r\n"
+
+    rcv_chunks = []
+
+    with socket.create_connection((icap_host, icap_port)) as sock:
+        sock.send(req.encode())
+        sock.sendall(content)
+        sock.send(footer.encode())
+    
+        while True:
+            data = sock.recv(4096)
+            rcv_chunks.append(data)
+            if (not len(data) or data[-5:] == b"0\r\n\r\n"):
+                break
+
+    rsp = b''.join(rcv_chunks)[:2048]
+
+    first_block = rsp.partition(b"\r\n\r\n")[0]
+    first_line = first_block.partition(b'\r\n')[0]
+
+    logging.debug(first_block)
+
+    if first_line != b"ICAP/1.0 200 OK":
+        raise EnvironmentError("ICAP not OK", first_line)
+
+    # this might differ on other icap servers
+    found = re.search(b"X-Infection-Found: .*Threat=(.*);", first_block)    
+    if found:
+        return ["FOUND", found[1]]
+
+    return ["OK", None]
+
+scan_file = get_file_scanner()
 
 
 if __name__ == "__main__":

@@ -76,10 +76,17 @@ Der Virenscanner läuft als Daemon. Die Aktualisierung der Viren-Signaturen erfo
 - [Installation](https://docs.clamav.net/manual/Installing.html)
 - [SignatureManagement](https://docs.clamav.net/manual/Usage/SignatureManagement.html)
 
+## ICAP als Alternative zu ClamAV
+
+Alternativ zu ClamAV kann auch ein externer ICAP-Server verwendet werden. Dazu ist der Host, Service 
+und ggf Port des ICAP Servers in der av_gate.ini einzutragen.
+
+Bei Verwendung von ICAP entfällt die Konfiguration und Installation von ClamAV. 
+
 ## Installation
 
 Es werden benötigt:
-- Python 3.8 
+- Python 3.11
 - uWSGI 1.19 
 - NGINX 1.18.0
 - ClamAV 0.105

@@ -1,20 +1,34 @@
+import configparser
 import io
 import re
-from unittest import mock
 import xml.etree.ElementTree as ET
+from unittest import mock
 from unittest.mock import Mock
 
-import av_gate
+import clamd  # type: ignore
 import pytest
 import requests
 
+import av_gate
+
+# setup app with own config
+av_gate.config = configparser.ConfigParser()
 av_gate.config.read_dict(
     {
-        "config": {"remove_malicious": "true"},
+        "config": {
+            "remove_malicious": "true", 
+            # "icap_host": "localhost", 
+            # "icap_service": "icap://icap.server.net/srv_clamav"
+            "clamd_socket": "/tmp/clamd.socket"
+        },
         "*:400": {"konnektor": "some"},
-        "8.8.8.8:401": {"konnektor": "some", "proxy_all_services": "true"},
+        "8.8.8.8:401": {
+            "konnektor": "some", 
+            "proxy_all_services": "true"    
+        },
     }
 )
+av_gate.scan_file = av_gate.get_file_scanner()
 
 
 @pytest.fixture
@@ -109,17 +123,16 @@ def client(monkeypatch):
 
 @pytest.fixture
 def clamav(monkeypatch):
-    with av_gate.app.app_context():
-        # Mock clamd
-        def mock_clamav(stream: io.BytesIO):
-            if b"EICAR" in stream.read():
-                return {"stream": ("FOUND", "Win.Test.EICAR_HDB-1")}
-            else:
-                return {"stream": ("OK", None)}
+    # Mock clamd
+    def instream(stream: io.BytesIO):
+        if b"EICAR" in stream.read():
+            return {"stream": ("FOUND", "Win.Test.EICAR_HDB-1")}
+        else:
+            return {"stream": ("OK", None)}
+    mock_instream = Mock(side_effect=instream)
+    monkeypatch.setattr(clamd, "ClamdUnixSocket", Mock(return_value=mock_instream))
 
-        monkeypatch.setattr(av_gate.clamav, "instream", Mock(side_effect=mock_clamav))
-
-        yield av_gate.clamav.instream
+    yield mock_instream
 
 
 @pytest.mark.parametrize(
@@ -324,7 +337,7 @@ def test_virus_replaced_mimetype(client, clamav):
     assert b"potentiell schadhafter Code" in parts[3]
 
 
-def test_virus_replaced_zip(client):
+def test_virus_replaced_zip(client, clamav):
     "check virus is replaced on real zip - needs clamav running"
 
     av_gate.REMOVE_MALICIOUS = False
@@ -425,6 +438,86 @@ Content-ID: <root.message@cxf.apache.org>
 
     assert res.status_code == 200
 
+
+def test_int_clam_av(client):
+    "check virus is removed with real clamd"
+
+    av_gate.REMOVE_MALICIOUS = True
+
+    data = (
+        open("./test/retrieveDocumentSet_req.xml", "rb")
+        .read()
+        .replace(b"\n", b"\r\n")
+        .replace(
+            b"<DocumentUniqueId>2.25.140094387439901233557</DocumentUniqueId>",
+            b"<DocumentUniqueId>GET_EICAR</DocumentUniqueId>",
+        )
+    )
+
+    res = client.post(
+        "/soap-api/PHRService/1.3.0",
+        headers={"X-real-ip": "9.9.9.9", "Host": "7.7.7.7:400"},
+        data=data,
+    )
+
+    parts = res.data.split(b"--uuid:6b62cda6-95c5-441d-9133-da3c5bfd7e6b")
+    xml = ET.fromstring(parts[1][re.search(b"(\r\n){2}?", parts[1]).end() :])
+
+    assert len(parts) == 5  # n+2
+    rres = xml.find("*//{*}RetrieveDocumentSetResponse/{*}RegistryResponse")
+    assert (
+        rres is not None
+        and rres.attrib["status"]
+        == "urn:ihe:iti:2007:ResponseStatusType:PartialSuccess"
+    )
+    assert (
+        "detected as malware" in rres.find("*/{*}RegistryError").attrib["codeContext"]
+    )
+
+def test_int_icap(client):
+    "check virus is removed with real icap"
+
+    av_gate.REMOVE_MALICIOUS = True
+    av_gate.config.read_dict(
+        {
+            "config": {
+                "icap_host": "localhost", 
+                "icap_service": "icap://icap.server.net/srv_clamav",
+                "clamd_socket": ""
+            }
+        }
+    )
+    av_gate.scan_file = av_gate.get_file_scanner()
+
+    data = (
+        open("./test/retrieveDocumentSet_req.xml", "rb")
+        .read()
+        .replace(b"\n", b"\r\n")
+        .replace(
+            b"<DocumentUniqueId>2.25.140094387439901233557</DocumentUniqueId>",
+            b"<DocumentUniqueId>GET_EICAR</DocumentUniqueId>",
+        )
+    )
+
+    res = client.post(
+        "/soap-api/PHRService/1.3.0",
+        headers={"X-real-ip": "9.9.9.9", "Host": "7.7.7.7:400"},
+        data=data,
+    )
+
+    parts = res.data.split(b"--uuid:6b62cda6-95c5-441d-9133-da3c5bfd7e6b")
+    xml = ET.fromstring(parts[1][re.search(b"(\r\n){2}?", parts[1]).end() :])
+
+    assert len(parts) == 5  # n+2
+    rres = xml.find("*//{*}RetrieveDocumentSetResponse/{*}RegistryResponse")
+    assert (
+        rres is not None
+        and rres.attrib["status"]
+        == "urn:ihe:iti:2007:ResponseStatusType:PartialSuccess"
+    )
+    assert (
+        "detected as malware" in rres.find("*/{*}RegistryError").attrib["codeContext"]
+    )
 
 @pytest.mark.parametrize(
     "in_id,out_id",

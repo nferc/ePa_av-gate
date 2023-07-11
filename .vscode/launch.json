@@ -18,7 +18,7 @@
       "type": "python",
       "request": "launch",
       "module": "flask",
-      "env": { "FLASK_APP": "av_gate.py", "FLASK_ENV": "development" },
+      "env": { "FLASK_APP": "av_gate.py", "FLASK_DEBUG": "true" },
       "args": ["run", "--no-debugger", "--port", "5001"],
       "jinja": true
     },
@@ -37,7 +37,7 @@
       "module": "flask",
       "env": {
         "FLASK_APP": "mockserver/mockserver.py",
-        "FLASK_ENV": "development"
+        "FLASK_DEBUG": "true"
       },
       "args": ["run", "--no-debugger"],
       "jinja": true
