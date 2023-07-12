@@ -20,6 +20,17 @@ from flask import Flask, Response, abort, request, stream_with_context
 
 __version__ = "1.5"
 
+ALL_METHODS = [
+    "GET",
+    "HEAD",
+    "POST",
+    "PUT",
+    "DELETE",
+    "CONNECT",
+    "OPTIONS",
+    "TRACE",
+    "PATCH",
+]
 # to prevent flooding log
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -72,7 +83,7 @@ def connector_sds():
         return create_response(ET.tostring(xml), upstream)
 
 
-@app.route("/<path:path>", methods=list(http.HTTPMethod))
+@app.route("/<path:path>", methods=ALL_METHODS)
 def switch(path):
     """Entrypoint with filter for PHRService"""
     if "PHRService" in path:
@@ -80,6 +91,75 @@ def switch(path):
     else:
         return other(path)
 
+@app.route("/favicon.ico", methods=["GET"])
+def fav():
+    return "ok"
+
+@app.route("/health", methods=["GET"])
+def health():
+    """Health check"""
+    res = check_clamav() or ""
+    res += check_icap() or ""
+    if res:
+        return Response(res, mimetype='text/xml', status=503)
+    return "OK"
+
+@app.route("/check", methods=["GET"])
+def check():
+    """Health check for Konnektors"""
+    res = ""
+    err_count = 0
+    for client in config.sections():
+        if client == "config":
+            continue
+        client_config = config[client]
+        konn = client_config["konnektor"]
+
+        # client cert
+        cert = None
+        if client_config.get("ssl_cert"):
+            cert = (client_config["ssl_cert"], client_config["ssl_key"])
+        verify = client_config.getboolean("ssl_verify")
+
+        try:
+            test = requests.request(
+                method=request.method,
+                url=konn + "/connector.sds",
+                cert=cert,
+                verify=verify,
+                timeout=3
+            )
+
+            if test.ok:
+                res += f"{konn}: ok"
+            else:
+                err_count += 1
+                res += f"{client} {konn}: {test.status_code} \n"
+                logging.warn(f"check failed for Konnektor {client} {konn} {test.status_code} {test.text}")
+
+        except Exception as err:
+            err_count += 1
+            res += f"{client} {konn}: {err} \n"
+            logging.warn(f"check failed for Konnektor: {client} {konn} {err}")
+
+    return Response(res, mimetype="text/xml", status=503 if err_count else 200)
+
+
+def check_clamav():
+    clamd_path = config["config"].get("clamd_socket")
+    if clamd_path:
+        test = clamav_sock.ping()
+        if  test != "PONG":
+            logging.warn(f"Healtchckeck failed for clamav: {test}")
+            return "clamav: no ping\n"
+
+def check_icap():
+    if icap_host:
+        try:
+            test = scan_file_icap(b"ping\r\n")
+        except Exception as err:
+            logging.warn(f"Healtcheck failed for icap: {err}")
+            return "icap: failed\n"
 
 def phr_service(path):
     """Scan AV on xop documents for retrieveDocumentSetRequest"""
@@ -169,7 +249,7 @@ def get_client_config():
         fallback = "*:" + port
         if not config.has_section(fallback):
             logging.error(f"Client {client} not found in av_gate.ini")
-            abort(500)
+            abort(503)
         else:
             return config[fallback]
 
