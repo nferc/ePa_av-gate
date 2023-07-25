@@ -17,9 +17,9 @@ av_gate.config.read_dict(
     {
         "config": {
             "remove_malicious": "true", 
-            # "icap_host": "localhost", 
-            # "icap_service": "icap://icap.server.net/srv_clamav"
-            "clamd_socket": "/tmp/clamd.socket"
+            "icap_host": "localhost", 
+            "icap_service": "icap://icap.server.net/srv_clamav"
+            #"clamd_socket": "/tmp/clamd.socket"
         },
         "*:400": {"konnektor": "some"},
         "8.8.8.8:401": {
@@ -141,7 +141,7 @@ def clamav(monkeypatch):
         ("2.2.2.2", "7.7.7.7:400", 200),
         ("8.8.8.8", "7.7.7.7:400", 200),
         ("8.8.8.8", "7.7.7.7:401", 200),
-        ("8.8.8.8", "7.7.7.7:402", 500),
+        ("8.8.8.8", "7.7.7.7:402", 503),
     ],
 )
 def test_routing_ip(client, real_ip, host, expected):
@@ -443,6 +443,15 @@ def test_int_clam_av(client):
     "check virus is removed with real clamd"
 
     av_gate.REMOVE_MALICIOUS = True
+    av_gate.config.read_dict(
+        {
+            "config": {
+                "icap_host": "", 
+                "clamd_socket": "",
+                "clamd_socket": "/tmp/clamd.socket"            }
+        }
+    )
+    av_gate.scan_file = av_gate.get_file_scanner()
 
     data = (
         open("./test/retrieveDocumentSet_req.xml", "rb")
@@ -483,6 +492,8 @@ def test_int_icap(client):
             "config": {
                 "icap_host": "localhost", 
                 "icap_service": "icap://icap.server.net/srv_clamav",
+                #"icap_host": "zdsrvdmzcld064.heliosdmz.local", 
+                #"icap_service": "icap://zdsrvdmzcld064.heliosdmz.local:1344/OMSScanReq-AV",
                 "clamd_socket": ""
             }
         }

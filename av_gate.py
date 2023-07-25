@@ -2,13 +2,13 @@ import configparser
 import email.generator
 import email.parser
 import email.policy
-import http
 import io
 import logging
 import os
 import re
 import socket
 import types
+import ssl
 from email.message import EmailMessage
 from typing import List, cast
 from urllib.parse import unquote, urlparse
@@ -154,6 +154,7 @@ def check_clamav():
             return "clamav: no ping\n"
 
 def check_icap():
+    icap_host = config["config"].get("icap_host")
     if icap_host:
         try:
             test = scan_file_icap(b"ping\r\n")
@@ -541,7 +542,6 @@ def dump(dict):
 
 def get_file_scanner():
     clamd_path = config["config"].get("clamd_socket")
-    global icap_host
     icap_host = config["config"].get("icap_host")
 
     if not clamd_path and not icap_host:
@@ -550,6 +550,7 @@ def get_file_scanner():
         raise AttributeError("Both, clamd and icap is configured")
     
     if clamd_path:
+        # CLAMAV
         import clamd  # type: ignore
         global clamav_sock
         clamav_sock = clamd.ClamdUnixSocket(
@@ -557,10 +558,6 @@ def get_file_scanner():
         return scan_file_clamav
     else:
         # ICAP
-        global icap_port
-        icap_port = config["config"].get("icap_port", 1344)
-        global icap_service
-        icap_service = config["config"]["icap_service"]
         return scan_file_icap
 
 def scan_file_clamav(content):
@@ -570,6 +567,11 @@ def scan_file_clamav(content):
     
 def scan_file_icap(content):
     "return scan result, do use icap"                
+    icap_service = config["config"]["icap_service"]
+    icap_host = config["config"]["icap_host"]
+    icap_port = config["config"].getint("icap_port", 1344)
+    icap_tls = config["config"].getboolean("icap_tls", False)
+
     req = f"RESPMOD {icap_service} ICAP/1.0\r\n"
     req += f"Host: {icap_host}\r\n"
     req += f"Encapsulated: res-body=0\r\n\r\n"
@@ -579,7 +581,7 @@ def scan_file_icap(content):
 
     rcv_chunks = []
 
-    with socket.create_connection((icap_host, icap_port)) as sock:
+    with _open_sock(icap_host, icap_port, icap_tls) as sock:
         sock.send(req.encode())
         sock.sendall(content)
         sock.send(footer.encode())
@@ -592,20 +594,41 @@ def scan_file_icap(content):
 
     rsp = b''.join(rcv_chunks)[:2048]
 
-    first_block = rsp.partition(b"\r\n\r\n")[0]
+    (first_block, second_block) = rsp.split(b"\r\n\r\n", 1)
     first_line = first_block.partition(b'\r\n')[0]
-
+    http_response_code = second_block.partition(b'\r\n')[0]
     logging.debug(first_block)
+    logging.debug(second_block[:500])
+
+    # check icap status
+    if first_line == b"ICAP/1.0 204 No modifications needed":
+        return ["OK", None]
 
     if first_line != b"ICAP/1.0 200 OK":
         raise EnvironmentError("ICAP not OK", first_line)
 
-    # this might differ on other icap servers
+    # check response status
+    if http_response_code != b"HTTP/1.0 403 Forbidden":
+        return ["OK", None]
+
+    # gather additional information    
     found = re.search(b"X-Infection-Found: .*Threat=(.*);", first_block)    
+    
     if found:
         return ["FOUND", found[1]]
 
-    return ["OK", None]
+    return ["FOUND", "unknown"]
+
+
+def _open_sock(host, port, tls):
+
+    if tls:
+        with socket.create_connection((host, port)) as sock:
+            context = ssl.create_default_context()
+            return context.wrap_socket(sock, server_hostname=host)
+    else:
+        return socket.create_connection((host, port))
+
 
 scan_file = get_file_scanner()
 
