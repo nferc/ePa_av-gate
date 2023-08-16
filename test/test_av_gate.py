@@ -490,10 +490,14 @@ def test_int_icap(client):
     av_gate.config.read_dict(
         {
             "config": {
-                "icap_host": "localhost", 
-                "icap_service": "icap://icap.server.net/srv_clamav",
-                #"icap_host": "zdsrvdmzcld064.heliosdmz.local", 
-                #"icap_service": "icap://zdsrvdmzcld064.heliosdmz.local:1344/OMSScanReq-AV",
+                # -- for local testing against docker icap - no TLS -- 
+                #"icap_host": "localhost", 
+                #"icap_service": "icap://icap.server.net/srv_clamav",
+                # -- for testing with helios icap --
+                "icap_host": "zdsrvdmzcld064.heliosdmz.local", 
+                "icap_port": 11344,
+                "icap_tls": True,
+                "icap_service": "icap://zdsrvdmzcld064.heliosdmz.local/OMSScanReq-AV",
                 "clamd_socket": ""
             }
         }

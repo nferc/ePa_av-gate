@@ -78,8 +78,8 @@ Der Virenscanner läuft als Daemon. Die Aktualisierung der Viren-Signaturen erfo
 
 ## ICAP als Alternative zu ClamAV
 
-Alternativ zu ClamAV kann auch ein externer ICAP-Server verwendet werden. Dazu ist der Host, Service 
-und ggf Port des ICAP Servers in der av_gate.ini einzutragen.
+Alternativ zu ClamAV kann auch ein externer ICAP-Server verwendet werden. Dazu ist der Host, Service, 
+Port und ggf. TLS des ICAP Servers in der av_gate.ini einzutragen.
 
 Bei Verwendung von ICAP entfällt die Konfiguration und Installation von ClamAV. 
 
@@ -89,7 +89,7 @@ Es werden benötigt:
 - Python 3.11
 - uWSGI 1.19 
 - NGINX 1.18.0
-- ClamAV 0.105
+- ClamAV 0.105 (sofern nicht ICAP genutzt wird)
 
 Bislang wurde als Host-System Ubuntu Server 20.04.3 LTS verwendet. Die oben genanten Versionen entsprechen dieser Konfiguration. 
 
@@ -139,7 +139,7 @@ Es gibt zwei Routen für einen einfachen Check der Verfügbarkeit der Anwendung:
 - /health 
   Prüft die eigene Verfügbarkeit und ob der Virenscanner (über Socket oder ICAP, je nach Konfigutaion) erreichbar ist.
 - /check
-  Prüft alle konfigurierten Konnektoren auf Erreichbarkeit mit einem Timeout von 3 Sekunden
+  Prüft alle konfigurierten Konnektoren auf Erreichbarkeit mit einem Timeout von 3 Sekunden.
 
 Der Check für die Konnektoren wurde separat implementiert, dieser Check eine hohe Antwortzeit haben kann, wenn viele Konnektoren vorhanden bzw. nicht erreichbar sind.
 

@@ -583,7 +583,7 @@ def scan_file_icap(content):
 
     with _open_sock(icap_host, icap_port, icap_tls) as sock:
         sock.send(req.encode())
-        sock.sendall(content)
+        sock.send(content)
         sock.send(footer.encode())
     
         while True:
